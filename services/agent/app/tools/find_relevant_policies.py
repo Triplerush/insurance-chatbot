@@ -2,7 +2,7 @@
 import sys
 from opensearchpy import OpenSearch
 from sentence_transformers import SentenceTransformer 
-from agent.app.config import get_settings
+from ...config import get_settings
 
 settings = get_settings()
 

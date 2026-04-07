@@ -33,11 +33,8 @@ class AgentSettings(BaseSettings):
         validation_alias="EMBEDDING_MODEL",
     )
 
-    # --- Retrieval + Reranking (Combinación de ambas ramas) ---
+    # --- Retrieval ---
     retrieval_top_k: int = Field(default=40, validation_alias="RETRIEVAL_TOP_K")
-    rerank_model: str = Field(default="cross-encoder/ms-marco-MiniLM-L-6-v2", validation_alias="RERANK_MODEL") 
-    rerank_batch_size: int = Field(default=32, validation_alias="RERANK_BATCH_SIZE") 
-    rerank_top_k: int = Field(default=10, validation_alias="RERANK_TOP_K") 
 
     # --- OpenSearch (índice de resúmenes para el router semántico) ---
     policy_summaries_index: str = Field(

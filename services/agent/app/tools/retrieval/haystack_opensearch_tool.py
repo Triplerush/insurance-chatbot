@@ -1,12 +1,10 @@
 import asyncio
-import os
 import logging
 from typing import List, Optional, Type
 
 from pydantic import BaseModel, Field, ConfigDict
 
 from ...config import get_settings
-from .reranker import CrossEncoderReranker
 from ...tools.find_relevant_policies import FindRelevantPoliciesTool
 
 from langchain_core.documents import Document
@@ -90,13 +88,6 @@ haystack_retriever_instance = OpenSearchHybridRetriever(
     join_mode="reciprocal_rank_fusion",
 )
 
-# --- Initialize reranker ---
-try:
-    reranker_instance = CrossEncoderReranker()
-except Exception as e:
-    logger.error(f"Failed to initialize Reranker, retrieval will be degraded: {e}", exc_info=True)
-    reranker_instance = None
-
 # --- Initialize the policy router (multi-index router) ---
 policy_finder_instance = FindRelevantPoliciesTool()
 
@@ -147,8 +138,7 @@ class RetrieverInput(BaseModel):
 
 class HybridOpenSearchTool(BaseTool):
     """
-    Hybrid retriever tool combining BM25 and dense embeddings (RRF fusion)
-    with an optional reranking stage for maximum relevance.
+    Hybrid retriever tool combining BM25 and dense embeddings (RRF fusion).
     Integrates a semantic router (FindRelevantPoliciesTool) for multi-index routing.
     """
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -157,12 +147,10 @@ class HybridOpenSearchTool(BaseTool):
     description: str = (
         "Searches the OpenSearch index (BM25 + embeddings + RRF) and returns "
         "a list of Chilean insurance policy documents with metadata (file, page, score). "
-        "Applies reranking for improved precision. "
         "In case of error, returns a document containing the error in metadata['error']."
     )
     args_schema: Type[BaseModel] = RetrieverInput
     haystack_retriever: OpenSearchHybridRetriever
-    reranker: Optional[CrossEncoderReranker]
     policy_finder: FindRelevantPoliciesTool
 
     def __init__(self, **data):
@@ -200,8 +188,7 @@ class HybridOpenSearchTool(BaseTool):
         Synchronous retrieval and reranking pipeline.
         Steps:
             1. Use the policy router to filter relevant indices/files.
-            2. Retrieve documents using OpenSearchHybridRetriever.
-            3. Apply CrossEncoder reranker if available.
+            2. Retrieve documents using OpenSearchHybridRetriever (BM25 + embeddings + RRF).
         """
         try:
             candidate_files = self.policy_finder(query, top_k=settings.retrieval_top_k // 2)
@@ -221,15 +208,7 @@ class HybridOpenSearchTool(BaseTool):
                 filters=filters,
             )
             docs = _convert_docs(results.get("documents", []))
-
-            if docs and self.reranker:
-                logger.debug(f"Reranking {len(docs)} documents for query: {query}")
-                docs = self.reranker.rerank(query, docs)
-                logger.debug(f"Reranking returned {len(docs)} documents")
-            elif docs:
-                docs = docs[:settings.rerank_top_k]
-
-            return docs
+            return docs[:effective_k]
 
         except OSConnectionError as e:
             logger.error("Unable to connect to OpenSearch at %s: %s", OPENSEARCH_HOST, e, exc_info=True)
@@ -266,72 +245,12 @@ class HybridOpenSearchTool(BaseTool):
         k: Optional[int] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> List[Document]:
-        """
-        Asynchronous retrieval and reranking pipeline.
-        Mirrors the synchronous _run() method using asyncio for concurrent operations.
-        """
-        try:
-            candidate_files = await asyncio.to_thread(self.policy_finder, query, top_k=settings.retrieval_top_k // 2)
-            filters = self._build_filters(candidate_files)
-            logger.debug(f"ASYNC HybridOpenSearchTool: Files selected by router: {candidate_files}")
-        except Exception as e:
-            logger.warning(f"ASYNC Router (FindRelevantPoliciesTool) failed: {e}. Continuing without file filter.")
-            filters = None
-
-        effective_k = k or RETRIEVAL_K_NET
-
-        try:
-            results = await asyncio.to_thread(
-                self.haystack_retriever.run,
-                query=query,
-                top_k_bm25=effective_k,
-                top_k_embedding=effective_k,
-                filters=filters,
-            )
-            docs = _convert_docs(results.get("documents", []))
-
-            if docs and self.reranker:
-                logger.debug(f"Async reranking {len(docs)} documents for query: {query}")
-                docs = await asyncio.to_thread(self.reranker.rerank, query, docs)
-                logger.debug(f"Async reranking returned {len(docs)} documents")
-            elif docs:
-                docs = docs[:settings.rerank_top_k]
-
-            return docs
-
-        except OSConnectionError as e:
-            logger.error("ASYNC: Unable to connect to OpenSearch: %s", e, exc_info=True)
-            return self._return_error_doc(
-                "Error: Unable to connect to the OpenSearch database.",
-                "connection_error",
-                e,
-            )
-        except RequestError as e:
-            logger.warning("ASYNC: Invalid OpenSearch query: %s, error=%s", query, e, exc_info=True)
-            return self._return_error_doc(
-                f"Error: Invalid Query OpenSearch ({e.error}).",
-                "request_error",
-                e,
-            )
-        except TransportError as e:
-            logger.error("ASYNC: OpenSearch transport error: %s", e, exc_info=True)
-            return self._return_error_doc(
-                f"Error: Transport error with OpenSearch (status {getattr(e, 'status_code', 'unknown')}).",
-                "transport_error",
-                e,
-            )
-        except Exception as e:
-            logger.exception("HybridOpenSearchTool._arun failed unexpectedly")
-            return self._return_error_doc(
-                f"Error: Internal search unavailable ({type(e).__name__}).",
-                "unexpected_error",
-                e,
-            )
+        """Async wrapper — delegates to the synchronous _run via a thread."""
+        return await asyncio.to_thread(self._run, query, k, run_manager)
 
 
 # --- Instantiate the retrieval tool with dependencies ---
 retrieval_tool = HybridOpenSearchTool(
     haystack_retriever=haystack_retriever_instance,
-    reranker=reranker_instance,
     policy_finder=policy_finder_instance,
 )

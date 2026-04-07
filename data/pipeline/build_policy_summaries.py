@@ -1,17 +1,25 @@
  # Builds a tiny summaries index for stage-1 routing (OpenSearch + embeddings).
-import argparse, csv
+import argparse, csv, os
+from dotenv import load_dotenv
 from opensearchpy import OpenSearch, helpers
 from sentence_transformers import SentenceTransformer
 
-INDEX = "policy_summaries_index"
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-DIM = 384  # all-MiniLM-L6-v2 output dimension
+load_dotenv()
+
+INDEX = os.getenv("POLICY_SUMMARIES_INDEX", "policy_summaries_index")
+EMBED_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+DIM = int(os.getenv("OPENSEARCH_EMBED_DIM", "384"))
 
 def get_client():
-    # Connects to local OpenSearch in Docker (admin/admin)
+    host = os.getenv("OPENSEARCH_HOST", "http://localhost:9200")
+    port = int(os.getenv("OPENSEARCH_PORT", "9200"))
+    user = os.getenv("OPENSEARCH_USER")
+    password = os.getenv("OPENSEARCH_PASSWORD")
+    hosts = [host] if host.startswith(("http://", "https://")) else [{"host": host, "port": port}]
+    http_auth = (user, password) if user else None
     return OpenSearch(
-        [{"host": "opensearch", "port": 9200}],
-        http_auth=("admin", "admin"),
+        hosts,
+        http_auth=http_auth,
         use_ssl=False, verify_certs=False,
         ssl_show_warn=False, ssl_assert_hostname=False,
     )

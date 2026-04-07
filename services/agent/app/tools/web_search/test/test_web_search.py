@@ -1,12 +1,7 @@
-from pathlib import Path
-import sys
 from dotenv import load_dotenv
+load_dotenv()
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(ROOT))
-load_dotenv(dotenv_path=ROOT / ".env")
-
-from agent.app.tools.web_search import WebSearchTool, WebSearchInput
+from ...web_search.web_search import WebSearchTool, WebSearchInput
 
 
 def test_web_search_returns_results_or_error():
