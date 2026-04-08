@@ -26,11 +26,6 @@ class ChatRequest(BaseModel):
         ..., description="Ordered list of chat messages, latest last."
     )
 
-    query: str = Field(
-        "",
-        description="Último mensaje del usuario (opcional si ya viene en messages)"
-    )
-
     top_k: int = Field(
         4, ge=1, le=10,
         description="Número de fragmentos a recuperar para grounding."

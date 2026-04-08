@@ -1,8 +1,10 @@
-﻿from typing import List
-import sys
+import logging
+from typing import List
+
 from opensearchpy import OpenSearch
-from sentence_transformers import SentenceTransformer 
 from ...config import get_settings
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -13,7 +15,7 @@ def _make_client() -> OpenSearch:
     host_entry = str(settings.opensearch_host)
     hosts = [host_entry] if host_entry.startswith(("http://", "https://")) else [{"host": host_entry, "port": settings.opensearch_port}]
     http_auth = (settings.opensearch_user, settings.opensearch_password) if settings.opensearch_user else None
-    
+
     return OpenSearch(
         hosts=hosts,
         http_auth=http_auth,
@@ -30,8 +32,8 @@ class FindRelevantPoliciesTool:
         self.client = _make_client()
 
     def __call__(self, question: str, top_k: int = 5) -> List[str]:
-        print(f"\n[ROUTER DEBUG] Buscando polizas candidatas para: '{question}' (top_k={top_k})", file=sys.stdout, flush=True)
-        
+        logger.debug("Router: searching candidate policies for '%s' (top_k=%d)", question, top_k)
+
         body_text = {
             "size": top_k,
             "_source": ["file_name"],
@@ -43,20 +45,17 @@ class FindRelevantPoliciesTool:
             }
         }
 
-        print("k desde el codigo del retriever : ", top_k)
-
-        
         try:
             response = self.client.search(index=SUMMARIES_INDEX, body=body_text)
             hits = response["hits"]["hits"]
-            
+
             files = [h["_source"]["file_name"] for h in hits]
-            print(f"[ROUTER DEBUG] Archivos encontrados ({len(files)}): {files}", file=sys.stdout, flush=True)
-            
+            logger.debug("Router: found %d candidate files: %s", len(files), files)
+
             return files
-            
+
         except Exception as e:
-            print(f"[ROUTER DEBUG] ⚠️ ERROR en la búsqueda del router: {e}", file=sys.stderr, flush=True)
+            logger.error("Router search failed: %s", e, exc_info=True)
             return []
 
 def quick_find(query: str, top_k: int = 5) -> List[str]:
