@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Literal, Optional
-from pydantic import Field, validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
-    
+
 class Settings(BaseSettings):
     """Centralised configuration for the Insurance Chatbot backend."""
     formatter: Literal["mock", "langchain", "gemini"] = Field(
@@ -25,14 +25,15 @@ class Settings(BaseSettings):
     gemini_max_output_tokens: Optional[int] = Field(
         default=None, validation_alias="GEMINI_MAX_OUTPUT_TOKENS"
     )
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
         extra = "ignore"
-    @validator("formatter", pre=True)
-    def _normalise_formatter(cls, value: str | None) -> str:
-        """Ensure formatter values match the expected lowercase literals."""
 
+    @field_validator("formatter", mode="before")
+    @classmethod
+    def _normalise_formatter(cls, value: str | None) -> str:
         return (value or "mock").lower()
 
 @lru_cache()

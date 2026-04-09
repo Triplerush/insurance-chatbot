@@ -1,5 +1,4 @@
 import streamlit as st
-from typing import Tuple
 from core.api import check_api_status, DEFAULT_API_URL
 from core.config import AppConfig, Theme
 
