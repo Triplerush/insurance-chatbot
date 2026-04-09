@@ -366,9 +366,15 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
         )
     except RuntimeError as exc:
         logger.error("Formatter failed in /chat: %s", exc, exc_info=True)
+        error_str = str(exc).lower()
+        if "429" in error_str or "resourceexhausted" in error_str or "quota" in error_str:
+            answer = ("El servicio de IA ha alcanzado su límite de solicitudes temporalmente. "
+                      "Por favor, espera unos minutos e intenta de nuevo.")
+        else:
+            answer = "Error: no se pudo generar la respuesta en este momento."
         debug_payload = {"error": str(exc)} if request.debug else None
         return ChatResponse(
-            answer="Error: no se pudo generar la respuesta en este momento.",
+            answer=answer,
             sources=[],
             usage={
                 "retrieved_documents": 0,

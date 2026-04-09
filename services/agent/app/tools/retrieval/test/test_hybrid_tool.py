@@ -22,7 +22,6 @@ def mock_retriever():
 def test_hybrid_tool_initialization(mock_retriever):
     tool = HybridOpenSearchTool(
         haystack_retriever=mock_retriever,
-        policy_finder=Mock(),
     )
     assert tool.name == "hybrid_opensearch_search"
     assert tool.haystack_retriever == mock_retriever

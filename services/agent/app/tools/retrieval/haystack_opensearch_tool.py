@@ -4,8 +4,7 @@ from typing import List, Optional, Type
 
 from pydantic import BaseModel, Field, ConfigDict
 
-from ...config import get_settings
-from ...tools.find_relevant_policies import FindRelevantPoliciesTool
+from ... import get_settings
 
 from langchain_core.documents import Document
 from langchain_core.tools import BaseTool
@@ -57,6 +56,14 @@ EMBED_MODEL = settings.embedding_model
 RETRIEVAL_K_NET = settings.retrieval_top_k
 
 # --- Initialize OpenSearch document store ---
+# Build http_auth: pass credentials only when both are set AND security is enabled.
+# Haystack defaults to reading OPENSEARCH_USERNAME/OPENSEARCH_PASSWORD env vars,
+# which conflicts with DISABLE_SECURITY_PLUGIN=true, so we override with None.
+if settings.opensearch_user and settings.opensearch_password and settings.opensearch_use_ssl:
+    _http_auth = (settings.opensearch_user, settings.opensearch_password)
+else:
+    _http_auth = None
+
 doc_store = OpenSearchDocumentStore(
     hosts=[OPENSEARCH_HOST],
     port=OPENSEARCH_PORT,
@@ -68,8 +75,7 @@ doc_store = OpenSearchDocumentStore(
     metadata_field="metadata",
     knn_space_type="cosinesimil",
     knn_engine="nmslib",
-    username=settings.opensearch_user,
-    password=settings.opensearch_password,
+    http_auth=_http_auth,
     use_ssl=settings.opensearch_use_ssl,
     verify_certs=settings.opensearch_use_ssl,
 )
@@ -87,10 +93,6 @@ haystack_retriever_instance = OpenSearchHybridRetriever(
     top_k_embedding=RETRIEVAL_K_NET,
     join_mode="reciprocal_rank_fusion",
 )
-
-# --- Initialize the policy router (multi-index router) ---
-policy_finder_instance = FindRelevantPoliciesTool()
-
 
 def _convert_docs(haystack_docs: List[HaystackDocument]) -> List[Document]:
     """
@@ -139,7 +141,6 @@ class RetrieverInput(BaseModel):
 class HybridOpenSearchTool(BaseTool):
     """
     Hybrid retriever tool combining BM25 and dense embeddings (RRF fusion).
-    Integrates a semantic router (FindRelevantPoliciesTool) for multi-index routing.
     """
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -151,10 +152,6 @@ class HybridOpenSearchTool(BaseTool):
     )
     args_schema: Type[BaseModel] = RetrieverInput
     haystack_retriever: OpenSearchHybridRetriever
-    policy_finder: FindRelevantPoliciesTool
-
-    def __init__(self, **data):
-        super().__init__(**data)
 
     def _return_error_doc(self, msg: str, error_type: str, exc: Exception | None = None) -> List[Document]:
         """Return a standardized document containing error information."""
@@ -170,14 +167,6 @@ class HybridOpenSearchTool(BaseTool):
             )
         ]
 
-    def _build_filters(self, candidate_files: List[str]) -> Optional[dict]:
-        """
-        Build Haystack-compatible filters to restrict retrieval by metadata.file_name.
-        """
-        if not candidate_files:
-            return None
-        return {"metadata": {"file_name": {"$in": candidate_files}}}
-
     def _run(
         self,
         query: str,
@@ -185,19 +174,9 @@ class HybridOpenSearchTool(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> List[Document]:
         """
-        Synchronous retrieval and reranking pipeline.
-        Steps:
-            1. Use the policy router to filter relevant indices/files.
-            2. Retrieve documents using OpenSearchHybridRetriever (BM25 + embeddings + RRF).
+        Synchronous retrieval pipeline.
+        Retrieves documents using OpenSearchHybridRetriever (BM25 + embeddings + RRF).
         """
-        try:
-            candidate_files = self.policy_finder(query, top_k=settings.retrieval_top_k // 2)
-            filters = self._build_filters(candidate_files)
-            logger.debug(f"HybridOpenSearchTool: Files selected by router: {candidate_files}")
-        except Exception as e:
-            logger.warning(f"Router (FindRelevantPoliciesTool) failed: {e}. Continuing without file filter.")
-            filters = None
-
         effective_k = k or RETRIEVAL_K_NET
 
         try:
@@ -205,7 +184,6 @@ class HybridOpenSearchTool(BaseTool):
                 query=query,
                 top_k_bm25=effective_k,
                 top_k_embedding=effective_k,
-                filters=filters,
             )
             docs = _convert_docs(results.get("documents", []))
             return docs[:effective_k]
@@ -249,8 +227,7 @@ class HybridOpenSearchTool(BaseTool):
         return await asyncio.to_thread(self._run, query, k, run_manager)
 
 
-# --- Instantiate the retrieval tool with dependencies ---
+# --- Instantiate the retrieval tool ---
 retrieval_tool = HybridOpenSearchTool(
     haystack_retriever=haystack_retriever_instance,
-    policy_finder=policy_finder_instance,
 )

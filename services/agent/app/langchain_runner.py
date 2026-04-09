@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from .config import get_settings
+from . import get_settings
 from .agent_state import AgentState
 from .tools import build_tools
 from .nodes import AgentNodes

@@ -14,7 +14,6 @@ from langchain_core.messages import (
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from .agent_state import AgentState
-from .prompts import AGENT_SYSTEM_PROMPT
 
 class AgentNodes:
     MAX_CONTEXT_DOCS = 10
@@ -76,8 +75,18 @@ class AgentNodes:
         msgs: List[BaseMessage] = [sys_msg]
         msgs.extend(state["messages"])
 
-        response = await llm_with_tools.ainvoke(msgs)
-        
+        try:
+            response = await llm_with_tools.ainvoke(msgs)
+        except Exception as e:
+            error_str = str(e).lower()
+            if "429" in error_str or "resource" in error_str and "exhausted" in error_str:
+                response = AIMessage(
+                    content="Lo siento, el servicio de IA está temporalmente saturado "
+                    "(límite de solicitudes alcanzado). Por favor, intenta de nuevo en unos minutos."
+                )
+            else:
+                raise
+
         duration_ms = (time.perf_counter() - start_time) * 1000
         output = {"messages": [response]}
 

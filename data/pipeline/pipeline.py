@@ -16,6 +16,7 @@ from typing import List, Dict, Any
 
 import config
 from download_from_s3 import download_pdfs_from_s3
+from download_public_pdfs import download_all as download_public_pdfs
 from setup_opensearch import get_client as get_os_client, recreate_index, MAPPING as OS_MAPPING
 from eda_policies import analyze_pdf, propose_chunking
 from ingest import load_pages, make_chunks, bulk_index
@@ -47,6 +48,9 @@ def download(skip: bool) -> str:
         secret=config.S3_AWS_SECRET_ACCESS_KEY,
         local_dir=local_dir
     )
+    if count == 0:
+        print("S3 download failed or returned 0 files. Falling back to public PDFs...")
+        count = download_public_pdfs(local_dir)
     if count == 0:
         raise RuntimeError(f"No files downloaded or found. Check S3 settings or local directory {local_dir}")
     

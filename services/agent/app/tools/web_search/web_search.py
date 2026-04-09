@@ -8,10 +8,9 @@ or a single-item list containing an error dict.
 from __future__ import annotations
 import os
 import logging
-import asyncio  # <--- AÑADIDO
+import asyncio
 from typing import List, Dict, Optional, Type
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from langchain_core.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
@@ -19,8 +18,6 @@ from langchain_core.callbacks import CallbackManagerForToolRun
 from tavily import TavilyClient
 from tavily.errors import MissingAPIKeyError
 import requests
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +40,13 @@ class WebSearchTool(BaseTool):
         "Use this when the local knowledge base lacks context or recent data."
     )
     args_schema: Type[WebSearchInput] = WebSearchInput
+    _client: Optional[TavilyClient] = None
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        api_key = os.getenv("TAVILY_API_KEY")
+        if api_key:
+            self._client = TavilyClient(api_key=api_key)
 
     def _error_result(self, message: str, error_type: str) -> List[Dict]:
         """Devuelve una lista con un solo dict de error para no romper al agente."""
@@ -64,18 +68,16 @@ class WebSearchTool(BaseTool):
         Returns: List[{title, url, snippet, source='tavily'}] OR List[{error, ...}]
         """
         try:
-            api_key = os.getenv("TAVILY_API_KEY")
-            if not api_key:
+            if not self._client:
                 logger.warning("WebSearchTool: TAVILY_API_KEY not found")
                 raise MissingAPIKeyError("TAVILY_API_KEY not set")
 
-            client = TavilyClient(api_key=api_key)
             logger.info(
                 "[WebSearchTool] Searching Tavily for: '%s' (max_results=%s, freshness_days=%s)",
                 query, max_results, freshness_days
             )
 
-            resp = client.search(
+            resp = self._client.search(
                 query=query,
                 max_results=max_results,
                 search_depth="advanced",
@@ -128,7 +130,7 @@ class WebSearchTool(BaseTool):
         freshness_days: int = 30,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> List[Dict]:
-        """Ejecuta el _run síncrono en un hilo separado."""
+        """Async wrapper — delegates to synchronous _run via a thread."""
         return await asyncio.to_thread(
             self._run,
             query=query,
