@@ -1,0 +1,183 @@
+name: Deploy Insurance Chatbot to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 1. Obtener el nombre del repo en minusculas (GHCR exige lowercase)
+      - name: Lowercase Repository Name
+        run: echo "REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      # 2. Login en GitHub Container Registry
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 3. Backend (FastAPI + LangGraph agent)
+      - name: Build and Push Backend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./services/backend/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/insurance_backend:latest
+          build-args: |
+            EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+      # 4. Frontend (Streamlit)
+      - name: Build and Push Frontend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./services/frontend/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/insurance_frontend:latest
+
+      # 5. Tasks (pipeline de ingesta efimero)
+      - name: Build and Push Tasks Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./data
+          file: ./data/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/insurance_tasks:latest
+          build-args: |
+            EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+      # 6. Deploy al VPS via SSH
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30m
+          envs: GEMINI_API_KEY,TAVILY_API_KEY
+          script: |
+            set -e
+
+            DEPLOY_DIR="/home/${{ secrets.VPS_USERNAME }}/insurance-chatbot"
+            REPO_URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+
+            # Crear carpeta de deploy
+            mkdir -p "$DEPLOY_DIR"
+
+            # Clonar repo temporal para extraer configs
+            TMPDIR=$(mktemp -d)
+            git clone --depth 1 "$REPO_URL" "$TMPDIR"
+
+            # Copiar archivos de orquestacion (compose + proxy)
+            cp "$TMPDIR/docker-compose.yml" "$DEPLOY_DIR/"
+            mkdir -p "$DEPLOY_DIR/proxy"
+            cp "$TMPDIR/proxy/nginx.conf" "$DEPLOY_DIR/proxy/"
+
+            # Carpetas para volumenes montados (PDFs descargados, EDA, eval)
+            mkdir -p "$DEPLOY_DIR/data/raw_policies"
+            mkdir -p "$DEPLOY_DIR/data/test/ragas_eval/results"
+            mkdir -p "$DEPLOY_DIR/eda_out"
+
+            # Eliminar clon temporal
+            rm -rf "$TMPDIR"
+
+            # Login a GHCR
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u "${{ github.actor }}" --password-stdin
+
+            # Asegurar red portfolio-net (la crea NPM; comando idempotente)
+            docker network create portfolio-net 2>/dev/null || true
+
+            # Crear .env con secrets y defaults para que .env_file no falle
+            cat > "$DEPLOY_DIR/.env" <<EOF
+            # OpenSearch
+            OPENSEARCH_VERSION=2.12.0
+            OPENSEARCH_HOST=opensearch
+            OPENSEARCH_PORT=9200
+            OPENSEARCH_INDEX=policies
+            OPENSEARCH_EMBED_DIM=384
+            OPENSEARCH_USER=admin
+            OPENSEARCH_PASSWORD=admin
+            POLICY_SUMMARIES_INDEX=policy_summaries_index
+
+            # Embeddings y chunking
+            EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+            CHUNK_SIZE=1000
+            CHUNK_OVERLAP=240
+            PDF_DIR=/app/data/raw_policies
+            EDA_OUT_DIR=/app/eda_out
+
+            # API keys (inyectadas por el CI)
+            GEMINI_API_KEY=$GEMINI_API_KEY
+            TAVILY_API_KEY=$TAVILY_API_KEY
+
+            # LLM config
+            GEMINI_MODEL=gemini-2.5-flash
+            GEMINI_TEMPERATURE=0.2
+            GEMINI_TOP_P=0.95
+            GEMINI_MAX_OUTPUT_TOKENS=1024
+
+            # Backend
+            INSURANCE_CHATBOT_FORMATTER=langchain
+            INSURANCE_CHATBOT_LANGCHAIN_RUNNER=agent.app.langchain_runner:run_langchain_agent
+            BACKEND_PORT=8000
+
+            # Frontend
+            INSURANCE_CHATBOT_API_URL=http://insurance_backend:8000/chat
+            STREAMLIT_SERVER_HEADLESS=true
+            FRONTEND_PORT=8501
+
+            # Tools
+            WEB_SEARCH_MAX_RESULTS=5
+            WEB_SEARCH_FRESHNESS_DAYS=30
+            RETRIEVAL_TOP_K=40
+
+            # S3 (no se usa en VPS — fallback a download_public_pdfs)
+            S3_AWS_ACCESS_KEY_ID=
+            S3_AWS_SECRET_ACCESS_KEY=
+            EOF
+
+            # Navegar al directorio de deploy
+            cd "$DEPLOY_DIR"
+
+            # Configurar imagenes inmutables
+            export BACKEND_IMAGE="${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/insurance_backend:latest"
+            export FRONTEND_IMAGE="${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/insurance_frontend:latest"
+            export TASKS_IMAGE="${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/insurance_tasks:latest"
+
+            # Pull de imagenes
+            docker compose pull
+            docker compose --profile ingest pull tasks
+
+            # Levantar servicios persistentes (backend, frontend, opensearch, proxy).
+            # `tasks` queda fuera por su profile "ingest".
+            docker compose down --remove-orphans || true
+            docker compose up -d
+
+            # Ejecutar pipeline de ingesta de manera efimera.
+            # `--skip-download` no se pasa: queremos que el pipeline baje los PDFs
+            # publicos de MAPFRE/SURA/Mutual la primera vez (luego skipea si ya existen).
+            # `--skip-eda` evita reanalisis pesado en cada deploy.
+            docker compose --profile ingest run --rm tasks \
+              python data/pipeline/pipeline.py --skip-eda
+
+            # Limpieza del disco
+            docker image prune -a -f

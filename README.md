@@ -1,204 +1,387 @@
 # Insurance Chatbot
 
-Interfaz **demo** y **API** para el proyecto *Insurance Chatbot*.
+AI-powered chatbot with Retrieval-Augmented Generation (RAG) for Chilean insurance policies.
 
-Este repositorio incluye:
+The system combines a **LangGraph agent** with **Gemini 2.5 Flash**, **hybrid search** (BM25 + dense embeddings via Haystack/OpenSearch), and **web search** (Tavily) to answer questions about coverage, exclusions, deductibles, and general conditions from real policy documents.
 
-- **Backend (FastAPI)** con el endpoint `/chat`.
-- **Frontend (Streamlit)** con una UI de chat que consume la API.
-- **Agent** con herramientas de **búsqueda web (Tavily)** y **retrieval en OpenSearch** (vía Haystack).
-- **Pipelines de datos** (EDA e **ingesta a OpenSearch**) y utilidades de **setup del índice**.
+## Table of Contents
 
-> Monorepo: `services/backend`, `services/frontend`, `services/agent`, y carpeta `data/` para PDFs, ingesta y setup.
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [Configuration](#configuration)
+- [API Reference](#api-reference)
+- [Frontend](#frontend)
+- [Evaluation](#evaluation)
+- [Docker Reference](#docker-reference)
+- [Troubleshooting](#troubleshooting)
+- [Tech Stack](#tech-stack)
 
----
+## Architecture
 
-## Requisitos
+```
+┌─────────────────┐     POST /chat     ┌──────────────────────────────────────┐
+│   Frontend      │ ─────────────────► │   Backend (FastAPI)                  │
+│   (Streamlit)   │ ◄───────────────── │   ├─ Formatter: mock | gemini       │
+│   :8501         │     JSON response  │   │            | langchain ──────┐   │
+└─────────────────┘                    │   └─ /health, /docs             │   │
+                                       └─────────────────────────────────│───┘
+                                                                         │
+                                       ┌─────────────────────────────────▼───┐
+                                       │   Agent (LangGraph)                 │
+                                       │   ├─ Gemini 2.5 Flash (LLM)        │
+                                       │   ├─ Query reformulation            │
+                                       │   └─ Tools:                         │
+                                       │       ├─ hybrid_opensearch_search   │
+                                       │       │  (BM25 + embeddings + RRF)  │
+                                       │       └─ web_search (Tavily)        │
+                                       └──────────────┬─────────────────┬────┘
+                                                      │                 │
+                                       ┌──────────────▼──┐   ┌─────────▼─────┐
+                                       │  OpenSearch      │   │  Tavily API   │
+                                       │  :9200           │   │  (web search) │
+                                       │  Index: policies │   └───────────────┘
+                                       └─────────────────┘
+```
 
-- **Python 3.10+**
-- **Docker** y **Docker Compose v2** (recomendado para levantar todo el stack)
-- (Opcional, para búsqueda web real) Cuenta y **API Key de Tavily**: <https://app.tavily.com/home>
+The application is composed of four Docker services orchestrated via `docker-compose.yml`:
 
----
+| Service | Base Image | Port | Description |
+|---|---|---|---|
+| `backend` | Python 3.11 / FastAPI | `${BACKEND_PORT}` → 8000 | REST API (`/chat`), includes the LangGraph agent |
+| `frontend` | Python 3.11 / Streamlit | `${FRONTEND_PORT}` → 8501 | Chat UI with light/dark themes |
+| `opensearch` | opensearchproject/opensearch:2.12.0 | 9200, 9600 | Hybrid search engine (BM25 + k-NN) |
+| `tasks` | Python 3.11 / Pipeline | — | Data tasks container (ingestion, EDA, evaluation) |
 
-## Estructura relevante
+## Prerequisites
+
+- **Docker** and **Docker Compose v2**
+- **Gemini API Key** — [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+- (Optional) **Tavily API Key** for web search — [https://app.tavily.com/home](https://app.tavily.com/home)
+- (Optional) **AWS S3 credentials** for downloading PDFs from a private bucket
+
+## Project Structure
 
 ```
 .
 ├── docker-compose.yml
+├── .env.example
+├── requirements.txt
+│
 ├── services/
 │   ├── backend/
-│   │   ├── app/ (FastAPI: main.py, config.py)
-│   │   └── Dockerfile
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   └── app/
+│   │       ├── main.py                # FastAPI: /chat, /health, /docs
+│   │       └── config.py              # Settings (pydantic-settings)
+│   │
 │   ├── frontend/
-│   │   ├── app.py (Streamlit)
-│   │   └── Dockerfile
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   ├── app.py                     # Streamlit entry point
+│   │   ├── core/                      # api, config, state, styles
+│   │   └── ui/                        # chat, sidebar, panels, widgets
+│   │
 │   └── agent/
+│       ├── requirements.txt
 │       └── app/
-│           ├── langchain_runner.py
+│           ├── langchain_runner.py    # AgentRunner entry point
+│           ├── graph.py               # LangGraph workflow definition
+│           ├── nodes.py               # Graph nodes (model, reformulate, tool)
+│           ├── agent_state.py         # Agent state schema
+│           ├── prompts.py             # System and reformulation prompts
+│           ├── config.py              # AgentSettings (pydantic-settings)
 │           └── tools/
-│               ├── retrieval/haystack_opensearch_tool.py
-│               └── web_search/web_search.py
+│               ├── retrieval/
+│               │   └── haystack_opensearch_tool.py
+│               └── web_search/
+│                   └── web_search.py
+│
 ├── data/
-│   ├── raw_policies/ (PDFs)
-│   ├── pipeline/ (ingest.py, eda_policies.py)
-│   ├── opensearch/setup_opensearch.py
-│   └── test/test_opensearch_setup.py
-├── tests/
-└── web_search_cli.py
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── raw_policies/                  # Source PDFs (downloaded by pipeline)
+│   ├── pipeline/
+│   │   ├── config.py                  # PipelineSettings
+│   │   ├── pipeline.py                # Full orchestrator
+│   │   ├── download_from_s3.py        # S3 downloader
+│   │   ├── download_public_pdfs.py    # Public PDF downloader
+│   │   ├── eda_policies.py            # Exploratory data analysis
+│   │   ├── setup_opensearch.py        # Index creation with k-NN mapping
+│   │   ├── ingest.py                  # Load → chunk → embed → index
+│   │   └── build_policy_summaries.py  # Summaries index (semantic router)
+│   └── test/
+│       ├── test_opensearch_setup.py
+│       └── ragas_eval/
+│           ├── run_golden_set.py
+│           ├── ragas_metrics.py
+│           ├── golden_set/
+│           │   ├── golden_set.json
+│           │   ├── golden_set_big.json
+│           │   └── golden_set_quick.json
+│           └── results/
+│
+├── docs/
+│   └── ingest.md
+└── eda_out/
+    └── eda_recommendations.json
 ```
 
----
+## Getting Started
 
-## Variables de entorno
+### 1. Configure environment variables
 
-Crea un archivo **`.env`** en la raíz (puedes partir de `.env.example` si existe). Ejemplo mínimo:
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and provide at least the required API keys:
 
 ```env
-# --- OpenSearch ---
-# Docker Compose: host 'opensearch' | Ejecución local: 'http://localhost:9200'
-OPENSEARCH_HOST=http://localhost:9200
-OPENSEARCH_PORT=9200
-OPENSEARCH_INDEX=policies
-OPENSEARCH_EMBED_DIM=384
-
-# --- Búsqueda web (Tavily) ---
-TAVILY_API_KEY=tu_api_key
-WEB_SEARCH_MAX_RESULTS=5
-WEB_SEARCH_FRESHNESS_DAYS=30
-
-# --- Selección del "formatter" del backend ---
-# mock | gemini | langchain
-INSURANCE_CHATBOT_FORMATTER=mock
-
-# --- Gemini (si usas INSURANCE_CHATBOT_FORMATTER=gemini) ---
-GEMINI_API_KEY=tu_api_key
-GEMINI_MODEL=gemini-2.5-flash
-GEMINI_TEMPERATURE=0.2
-GEMINI_TOP_P=0.95
-GEMINI_MAX_OUTPUT_TOKENS=1024
-
-# --- LangChain (si usas INSURANCE_CHATBOT_FORMATTER=langchain) ---
-# Con PYTHONPATH=services, el runner vive en services.agent.app.langchain_runner
-INSURANCE_CHATBOT_LANGCHAIN_RUNNER=services.agent.app.langchain_runner:run_langchain_agent
+GEMINI_API_KEY=your_gemini_api_key
+TAVILY_API_KEY=your_tavily_api_key          # optional
+S3_AWS_ACCESS_KEY_ID=your_access_key        # optional
+S3_AWS_SECRET_ACCESS_KEY=your_secret_key    # optional
 ```
 
-> **Nota**: si levantas el stack con Docker Compose, cambia `OPENSEARCH_HOST` a `opensearch` (el nombre del servicio); para ejecución local directa, deja `http://localhost:9200`.
+All other defaults in `.env.example` are preconfigured for Docker (e.g. `OPENSEARCH_HOST=opensearch`, `INSURANCE_CHATBOT_API_URL=http://backend:8000/chat`).
 
----
+### 2. Build and start the stack
 
-## Inicio rápido (Docker Compose — recomendado)
+```bash
+docker compose up -d --build
+```
 
-1) **Levanta el stack**:
-    ```bash
-    docker compose up -d --build
-    ```
+This builds and starts all four services. The backend waits for OpenSearch to pass its health check before accepting requests.
 
-2) **Crea el índice híbrido** de OpenSearch:
-    ```bash
-    # Si el proyecto está montado dentro del contenedor backend (lo usual):
-    docker compose exec backend bash -lc "python data/opensearch/setup_opensearch.py"
-    
-    # Alternativa (desde tu host, con deps de 'data/requirements.txt'):
-    #   pip install -r data/requirements.txt
-    #   python data/opensearch/setup_opensearch.py
-    ```
+### 3. Run the data pipeline
 
-3) **Ingesta de PDFs** a OpenSearch (opcional pero recomendado):
-    ```bash
-    docker compose exec backend bash -lc "python data/pipeline/ingest.py"
-    ```
+The `tasks` container handles all data operations. The full pipeline performs four steps in sequence: PDF download, OpenSearch index setup, exploratory data analysis, and ingestion.
 
-4) **Acceso**:
-    - **Backend**: <http://localhost:8000>  
-      - Docs: <http://localhost:8000/docs>  
-      - Health: <http://localhost:8000/health>
-    - **Frontend**: <http://localhost:8501>
-    ---
+```bash
+# Full pipeline (download + setup + EDA + ingest)
+docker compose run --rm tasks python pipeline/pipeline.py
 
-## Ejecución local (sin Compose)
+# Skip download (PDFs already in data/raw_policies/)
+docker compose run --rm tasks python pipeline/pipeline.py --skip-download
 
-1) **Crear entorno**:
-    ```bash
-    python -m venv .venv
-    source .venv/bin/activate        # Windows: .venv\Scripts\activate
-    ```
+# Skip download and EDA (use CHUNK_SIZE/CHUNK_OVERLAP from .env)
+docker compose run --rm tasks python pipeline/pipeline.py --skip-download --skip-eda
+```
 
-2) **Instalar dependencias**
-    ```bash
-    pip install -r requirements.txt
-    ```
+Individual steps can also be executed independently:
 
-3) **Arrancar OpenSearch** (usa Docker si no tienes un cluster local):
-    ```bash
-    docker compose up -d opensearch
-    ```
+```bash
+# Create or recreate the OpenSearch index
+docker compose run --rm tasks python pipeline/setup_opensearch.py --recreate
 
-4) **Crear índice e ingerir pólizas** (los PDFs deben estar en `data/raw_policies/`):
-    ```bash
-    python data/opensearch/setup_opensearch.py
-    python data/pipeline/ingest.py
-    ```
+# Run EDA only
+docker compose run --rm tasks python pipeline/eda_policies.py
 
-5) **Backend** (desde la raíz del repo):
-    ```bash
-    PYTHONPATH=services uvicorn services.backend.app.main:app --reload --host 0.0.0.0 --port 8001
-    ```
+# Run ingestion only (index must already exist)
+docker compose run --rm tasks python pipeline/ingest.py
 
-6) **Frontend** (otra terminal):
-    ```bash
-    export INSURANCE_CHATBOT_API_URL=http://127.0.0.1:8001/chat
-    streamlit run services/frontend/app.py --server.port 8501
-    ```
-    - Activa la casilla “Modo debug” en el sidebar para ver los pasos del agente (`debug.steps`) y las fuentes recuperadas en los expanders correspondientes.
+# Run ingestion with index recreation
+docker compose run --rm tasks python pipeline/ingest.py --recreate
 
----
+# Download public Chilean insurance PDFs
+docker compose run --rm tasks python pipeline/download_public_pdfs.py
 
-## Contrato del endpoint `/chat`
+# Build the policy summaries index (semantic router)
+docker compose run --rm tasks python pipeline/build_policy_summaries.py --csv path/to/summaries.csv
+```
 
-### Request
+### 4. Verify ingestion
+
+```bash
+curl -s http://localhost:9200/policies/_count
+curl -s http://localhost:9200/_cluster/health
+```
+
+### 5. Access the application
+
+| Service | URL |
+|---|---|
+| Frontend (Chat UI) | http://localhost:8501 |
+| Backend API | http://localhost:8000 |
+| Swagger Docs | http://localhost:8000/docs |
+| Health Check | http://localhost:8000/health |
+| OpenSearch | http://localhost:9200 |
+
+## Configuration
+
+All variables are defined in `.env` and injected into containers via the `env_file` directive in `docker-compose.yml`.
+
+### OpenSearch
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENSEARCH_VERSION` | `2.12.0` | OpenSearch Docker image version |
+| `OPENSEARCH_HOST` | `opensearch` | OpenSearch hostname (Docker service name) |
+| `OPENSEARCH_PORT` | `9200` | OpenSearch HTTP port |
+| `OPENSEARCH_INDEX` | `policies` | Primary index name |
+| `OPENSEARCH_EMBED_DIM` | `384` | Embedding dimension (must match the model) |
+| `OPENSEARCH_USER` | `admin` | OpenSearch username |
+| `OPENSEARCH_PASSWORD` | `admin` | OpenSearch password |
+
+### API Keys
+
+| Variable | Description |
+|---|---|
+| `GEMINI_API_KEY` | Google Gemini API key (required for `langchain` and `gemini` formatters) |
+| `TAVILY_API_KEY` | Tavily API key (optional, enables web search) |
+
+### Backend
+
+| Variable | Default | Description |
+|---|---|---|
+| `BACKEND_PORT` | `8000` | Exposed backend port |
+| `INSURANCE_CHATBOT_FORMATTER` | `langchain` | Response strategy: `mock`, `gemini`, or `langchain` |
+| `INSURANCE_CHATBOT_LANGCHAIN_RUNNER` | `agent.app.langchain_runner:run_langchain_agent` | Agent runner module path |
+
+### Frontend
+
+| Variable | Default | Description |
+|---|---|---|
+| `FRONTEND_PORT` | `8501` | Exposed frontend port |
+| `INSURANCE_CHATBOT_API_URL` | `http://backend:8000/chat` | Backend `/chat` endpoint URL |
+| `STREAMLIT_SERVER_HEADLESS` | `true` | Run Streamlit without opening a browser |
+
+### Gemini
+
+| Variable | Default | Description |
+|---|---|---|
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model identifier |
+| `GEMINI_TEMPERATURE` | `0.2` | Generation temperature |
+| `GEMINI_TOP_P` | `0.95` | Top-p sampling |
+| `GEMINI_MAX_OUTPUT_TOKENS` | `1024` | Maximum output tokens |
+
+### Agent Tools
+
+| Variable | Default | Description |
+|---|---|---|
+| `WEB_SEARCH_MAX_RESULTS` | `5` | Maximum Tavily results per query |
+| `WEB_SEARCH_FRESHNESS_DAYS` | `30` | Prefer results within N days |
+| `RETRIEVAL_TOP_K` | `40` | Documents to retrieve per BM25/embedding channel |
+
+### Embeddings and Ingestion
+
+| Variable | Default | Description |
+|---|---|---|
+| `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Embedding model |
+| `CHUNK_SIZE` | `1000` | Chunk size in characters |
+| `CHUNK_OVERLAP` | `240` | Overlap between chunks |
+| `PDF_DIR` | `./data/raw_policies` | Source PDF directory |
+| `POLICY_SUMMARIES_INDEX` | `policy_summaries_index` | Summaries index for the semantic router |
+
+### S3
+
+| Variable | Description |
+|---|---|
+| `S3_AWS_ACCESS_KEY_ID` | AWS Access Key ID |
+| `S3_AWS_SECRET_ACCESS_KEY` | AWS Secret Access Key |
+
+## API Reference
+
+### Formatter Selection
+
+The backend resolves the response strategy through `INSURANCE_CHATBOT_FORMATTER`:
+
+| Value | Behavior |
+|---|---|
+| `mock` | Returns static text. No external API calls. Useful for infrastructure testing. |
+| `gemini` | Calls Gemini directly with retrieved contexts. No autonomous tool usage. |
+| `langchain` | Runs the full LangGraph agent with hybrid retrieval and optional web search. **(Recommended)** |
+
+When using `langchain`, the agent executes a graph with three node types:
+
+1. **`call_model_node`** — Invokes Gemini with bound tools, system prompt, conversation history, and accumulated context.
+2. **`reformulate_for_tools_node`** — Rewrites ambiguous tool queries using conversation history for better retrieval.
+3. **`call_tool_node`** — Executes tools in parallel (`hybrid_opensearch_search`, `web_search`). The loop repeats up to 3 iterations.
+
+### `POST /chat`
+
+#### Request
+
 ```json
 {
   "messages": [
-    {"role": "user", "content": "Último mensaje del usuario"},
-    {"role": "assistant", "content": "Mensajes previos opcionales"}
+    { "role": "user", "content": "¿Qué cubre la póliza de hogar?" },
+    { "role": "assistant", "content": "Previous response..." },
+    { "role": "user", "content": "¿Y los cristales?" }
   ],
-  "top_k": 3,
+  "top_k": 4,
   "enable_web_search": false,
-  "metadata": {"client": "web"}
+  "debug": false,
+  "language": "es"
 }
 ```
 
-- `messages`: historial ordenado; el **último** debe ser del **usuario**.
-- `top_k`: máximo **10**, cantidad de fragmentos a recuperar.
-- `enable_web_search`: si es `true` y hay `TAVILY_API_KEY`, habilita búsqueda web real (Tavily); de lo contrario, se usa stub.
-- `metadata`: libre.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `messages` | `Message[]` | required | Ordered conversation history. The last message must have `role: "user"`. |
+| `top_k` | `integer` | `4` | Number of fragments to retrieve (1–10). |
+| `enable_web_search` | `boolean` | `false` | Enable web search (requires `TAVILY_API_KEY`). |
+| `debug` | `boolean` | `false` | Include the `debug` block in the response. |
+| `language` | `string` | `"es"` | Response language. |
+| `metadata` | `object` | `null` | Free-form client metadata. |
 
-### Response
+#### Response
+
 ```json
 {
-  "answer": "Texto generado por el formatter (mock/gemini/langchain).",
+  "answer": "Sí, la póliza cubre cristales. Según las Condiciones Generales...",
   "sources": [
     {
-      "id": "policy-1",
-      "title": "Documento de Póliza",
-      "snippet": "Extracto relevante...",
-      "url": "https://example.com/policies/1"
+      "title": "mapfre_cristales.pdf",
+      "snippet": "La póliza cubre la rotura accidental de cristales...",
+      "file_name": "mapfre_cristales.pdf",
+      "page": 3,
+      "chunk_id": 12,
+      "score": 0.87
     }
   ],
   "usage": {
-    "retrieved_documents": 3,
+    "retrieved_documents": 5,
     "web_search_enabled": false,
-    "formatter": "langchain"
+    "formatter": "langchain",
+    "language": "es",
+    "top_k": 4,
+    "debug_enabled": false
   }
 }
 ```
 
-- `answer`: texto final (mock/Gemini/tu agente LangChain).
-- `sources`: contrato para trazabilidad/justificación.
-- `usage`: métricas diagnósticas (puedes ampliarlo).
+| Field | Type | Description |
+|---|---|---|
+| `answer` | `string` | Generated response text. |
+| `sources` | `Source[]` | Retrieved documents with metadata (title, snippet, file, page, score). |
+| `usage` | `object` | Diagnostic metrics. |
+| `debug` | `object` | Present only when `debug: true`. Contains agent steps, timings, and tool invocations. |
 
-### Ejemplo con `debug=true`
+#### Debug Response Example
+
+When `debug: true` is passed, the response includes execution details:
+
+```json
+{
+  "debug": {
+    "total_duration_ms": 3421.55,
+    "steps": [
+      { "step": "call_model_node", "duration_ms": 1200.3 },
+      { "step": "reformulate_for_tools_node", "duration_ms": 800.1 },
+      { "step": "call_tool", "tool": "hybrid_opensearch_search", "duration_ms": 450.2 },
+      { "step": "call_model_node", "duration_ms": 970.9 }
+    ],
+    "chunks": [],
+    "tool_iterations": 1
+  }
+}
+```
+
+#### Example
 
 ```bash
 curl -s -X POST "http://localhost:8000/chat" \
@@ -207,203 +390,150 @@ curl -s -X POST "http://localhost:8000/chat" \
         "messages": [
           {"role": "user", "content": "¿Qué cubre la póliza de hogar básica?"}
         ],
-        "top_k": 3,
+        "top_k": 4,
         "enable_web_search": false,
         "debug": true,
         "language": "es"
       }'
 ```
 
-Respuesta (ejemplo con formatter `langchain`/`mock`):
+### `GET /health`
 
-```json
-{
-  "answer": "(mock) Respondiendo en es. Cuando el LLM esté integrado...",
-  "sources": [],
-  "usage": {
-    "retrieved_documents": 0,
-    "web_search_enabled": false,
-    "formatter": "langchain",
-    "language": "es",
-    "top_k": 3,
-    "debug_enabled": true
-  },
-  "debug": {
-    "formatter": "mock",
-    "messages": [
-      {"role": "user", "content": "¿Qué cubre la póliza de hogar básica?"}
-    ],
-    "contexts": [],
-    "top_k": 3,
-    "enable_web_search": false,
-    "language": "es"
-  }
-}
+Returns `{"status": "ok"}` when the service is running.
+
+### `GET /docs`
+
+Swagger UI with the full API schema.
+
+## Frontend
+
+The Streamlit frontend (`services/frontend/`) provides:
+
+- Interactive chat with conversation history.
+- Light and dark theme selection via the sidebar.
+- Configurable sidebar: API URL, `top_k`, web search toggle, debug mode, language.
+- Information panels:
+  - **Sources** — retrieved documents with file name, page, and relevance score.
+  - **Metrics** — number of retrieved documents, active formatter, latency.
+  - **Debug** — agent steps, invoked tools, and per-step timings (requires debug mode).
+- Quick-access suggestion buttons for common queries.
+
+## Evaluation
+
+The `tasks` container includes an automated evaluation system using [RAGAS](https://docs.ragas.io/) metrics (`faithfulness` and `context_precision`).
+
+### Running the evaluation
+
+```bash
+# Standard golden set (35 scenarios across 5 categories)
+docker compose run --rm tasks python test/ragas_eval/run_golden_set.py \
+  --base-url http://backend:8000/chat \
+  --golden-set test/ragas_eval/golden_set/golden_set.json
+
+# Quick golden set (fewer scenarios, for fast iteration)
+docker compose run --rm tasks python test/ragas_eval/run_golden_set.py \
+  --base-url http://backend:8000/chat \
+  --golden-set test/ragas_eval/golden_set/golden_set_quick.json
+
+# Compare against a previous baseline
+docker compose run --rm tasks python test/ragas_eval/run_golden_set.py \
+  --base-url http://backend:8000/chat \
+  --baseline-metrics results/golden_before.metrics.json
 ```
 
-> Con un agente LangChain real, el bloque `debug` incluye los pasos del grafo, chunks recuperados, herramientas invocadas, etc.
+The golden set covers five scenario categories: `simple`, `follow_up`, `web`, `combined`, and `negative`.
 
----
+Results are saved to `data/test/ragas_eval/results/` (mounted as a Docker volume).
 
-## Selección de formateador (mock / Gemini / LangChain)
+## Docker Reference
 
-El backend decide según `INSURANCE_CHATBOT_FORMATTER`:
+```bash
+# Build and start all services
+docker compose up -d --build
 
-### 1) Mock (por defecto)
-```env
-INSURANCE_CHATBOT_FORMATTER=mock
+# Follow logs
+docker compose logs -f
+docker compose logs -f backend
+
+# Restart a specific service
+docker compose restart backend
+
+# Stop all services
+docker compose down
+
+# Stop and remove volumes (deletes OpenSearch data)
+docker compose down -v
+
+# Rebuild a single service
+docker compose build backend
+docker compose up -d backend
+
+# Run tests
+docker compose run --rm tasks pytest -q
+
+# Open an interactive shell in the tasks container
+docker compose run --rm tasks bash
 ```
-Responde sin llamar a modelos externos.
 
-### 2) Gemini
-```env
-INSURANCE_CHATBOT_FORMATTER=gemini
-GEMINI_API_KEY=tu_api_key
-GEMINI_MODEL=gemini-2.5-flash
+## Troubleshooting
+
+### OpenSearch fails to start or remains unhealthy
+
+```bash
+docker compose logs -f opensearch
+curl -s http://localhost:9200/_cluster/health
 ```
 
-### 3) LangChain + Tools (retrieval + web search)
-```env
-INSURANCE_CHATBOT_FORMATTER=langchain
-INSURANCE_CHATBOT_LANGCHAIN_RUNNER=services.agent.app.langchain_runner:run_langchain_agent
-TAVILY_API_KEY=tu_api_key             # para web search real
-OPENSEARCH_HOST=opensearch|localhost  # según tu modo
+OpenSearch may take 30–60 seconds to become ready. The backend has a `depends_on` directive with `condition: service_healthy` and will wait automatically.
+
+Verify that ports `9200` and `9600` are not in use by another process.
+
+### Backend does not respond
+
+```bash
+docker compose ps
+docker compose logs -f backend
+curl -s http://localhost:8000/health
 ```
 
-El runner vive en `services/agent/app/langchain_runner.py` y puede invocar:
-- **Retrieval** híbrido (BM25 + embeddings) en OpenSearch:  
-  `services/agent/app/tools/retrieval/haystack_opensearch_tool.py`
-- **Web search** (Tavily):  
-  `services/agent/app/tools/web_search/web_search.py`
+### Embedding dimension mismatch
 
----
+If the embedding model is changed, the following steps are required:
 
-## OpenSearch (setup e ingesta)
-
-1) **Crear índice híbrido**:
-    ```bash
-    # Docker:
-    docker compose exec backend bash -lc "python data/opensearch/setup_opensearch.py"
-    
-    # Local:
-    python data/opensearch/setup_opensearch.py
-    ```
-
-2) **Ingestar PDFs** (`data/raw_policies/`):
-    ```bash
-    python data/pipeline/ingest.py
-    ```
-
-> La ingesta usa **sentence-transformers/all-MiniLM-L6-v2** (dim=**384**) ⇒ debe coincidir con `OPENSEARCH_EMBED_DIM=384`.
-
----
-
-## Frontend (Streamlit)
-
-- Archivo: `services/frontend/app.py`
-- Ejecuta la UI de chat en <http://localhost:8501>.
-- Configurable vía env: `INSURANCE_CHATBOT_API_URL` (por defecto apunta al backend local o al servicio `backend` en Docker).
-
----
-
-## Utilidades y pruebas
-
-- **CLI de búsqueda web** (útil para depurar Tavily):
-  ```bash
-  python web_search_cli.py --q "qué cubre hospitalización" --k 5
-  ```
-- **Pruebas** (setup de OpenSearch, web search, etc.):
-  ```bash
-  pytest -q
-  # o:
-  python -m pytest -q
-  ```
-
-### Golden Set (benchmark de respuestas)
-
-1. Asegúrate de tener el backend levantado en `http://127.0.0.1:8001` (o ajusta `--base-url`).
-2. Ejecuta el script de evaluación:
+1. Update `OPENSEARCH_EMBED_DIM` to match the new model's output dimension.
+2. Recreate the index:
    ```bash
-   python scripts/run_golden_set.py \
-     --base-url http://127.0.0.1:8001/chat \
-     --golden-set data/golden_set/golden_set.json \
-     --output results/golden_before.jsonl
+   docker compose run --rm tasks python pipeline/setup_opensearch.py --recreate
    ```
-   - El archivo `data/golden_set/golden_set.json` incluye 35 escenarios distribuidos en cinco categorías: `simple`, `follow_up`, `web`, `combined`, `negative`.
-   - El script crea una fila por pregunta con la respuesta del agente, tiempos y metadatos; por defecto guarda la corrida en `results/golden_<timestamp>.jsonl`.
-3. Implementa tus cambios (por ejemplo, Tarea 1 o 2) y vuelve a ejecutar el script para generar `results/golden_after.jsonl`.
-4. El script también produce un archivo `*.metrics.json` con métricas RAGAS (`faithfulness` y `context_precision`). Usa `--baseline-metrics` para comparar contra una corrida anterior:
+3. Re-ingest the documents:
    ```bash
-   python scripts/run_golden_set.py \
-     --base-url http://127.0.0.1:8001/chat \
-     --baseline-metrics results/golden_before.metrics.json
+   docker compose run --rm tasks python pipeline/ingest.py
    ```
-5. Por defecto el script usa `gemini-2.5-flash`. Asegúrate de exportar `GEMINI_API_KEY` (o pasa `--gemini-api-key`):
-   ```bash
-   python scripts/run_golden_set.py \
-     --base-url http://127.0.0.1:8001/chat \
-     --ragas-model gemini-2.5-flash \
-     --gemini-api-key "$GEMINI_API_KEY"
-   ```
-6. Completa el campo `reference_answer` en `data/golden_set/golden_set.json` para tener contexto adicional al revisar resultados (aunque actualmente solo se calculan `faithfulness` y `context_precision`).
 
----
+### Web search returns no results
 
-## Solución de problemas
+- Verify that `TAVILY_API_KEY` is set correctly in `.env`.
+- Verify that `enable_web_search` is set to `true` in the request payload.
+- The agent only invokes web search when:
+  - The query mixes an external event with a policy question, **or**
+  - The internal search returned insufficient results.
 
-- **OpenSearch “unhealthy” o sin índice**  
-  Verifica puertos `9200/9600`. Corre `setup_opensearch.py` y revisa logs:
-  ```bash
-  docker compose logs -f opensearch
-  ```
-- **El backend no encuentra módulos `backend.*`**  
-  Ejecuta con `PYTHONPATH=services` (ver comandos arriba).
-- **Web search no retorna resultados**  
-  Asegura `TAVILY_API_KEY` y `enable_web_search=true` en la request; verifica que el formatter/runner invoque la tool.
-- **Dimensión de embeddings inconsistente**  
-  Si cambias el modelo de embeddings, actualiza `OPENSEARCH_EMBED_DIM` y reindexa.
+### Gemini rate limiting (HTTP 429)
 
----
+The agent handles 429 errors from Gemini gracefully and returns a message indicating that the user should wait before retrying.
 
-## Roadmap breve
+## Tech Stack
 
-- Integrar retrieval real por defecto en `/chat`.
-- Afinar prompts del formatter (Gemini/LangChain).
-- Mejorar trazabilidad de `sources` y diagnósticos en `usage`.
-
-
-## Router multi-índice
-
-- **Activar venv 3.9 e instalar
-& .\.venv\Scripts\Activate.ps1
-python --version   # debe decir 3.9.x
-pip install -r requirements.txt
-pip install eval-type-backport==0.2.2 importlib-metadata==6.8.0 "zipp>=3.15"
-
-- **OpenSearch
-docker compose up -d opensearch
-curl.exe -s http://localhost:9200 | Out-String
-
-- **Ingesta PDFs → índice `policies`
-$env:OPENSEARCH_HOST = "http://localhost:9200"
-python .\data\pipeline\ingest.py
-curl.exe -s http://localhost:9200/policies/_count | Out-String  # debe ser > 0
-
-- **Probar localizador de pólizas (Etapa 1)
-$env:OPENSEARCH_HOST = "http://localhost:9200"
-python -m services.agent.app.tools.find_relevant_policies "coaseguro en el extranjero"
-
-- **Backend (elige uno)
-$env:PYTHONPATH = "services"
-
-- **LangChain (usa el retriever real)
-$env:INSURANCE_CHATBOT_FORMATTER = "langchain"
-$env:INSURANCE_CHATBOT_LANGCHAIN_RUNNER = "services.agent.app.langchain_runner:run_langchain_agent"
-uvicorn services.backend.app.main:app --reload --host 127.0.0.1 --port 8001
-
-- **Consultas de prueba
-Invoke-RestMethod http://127.0.0.1:8001/health
-'{"messages":[{"role":"user","content":"¿Cuál es el deducible anual de hospitalización?"}],"top_k":3,"enable_web_search":false,"debug":true,"language":"es"}' |
-  Set-Content -Path req1.json -Encoding utf8 -NoNewline
-curl.exe -s -X POST "http://127.0.0.1:8001/chat" -H "Content-Type: application/json; charset=utf-8" --data-binary "@req1.json"
-
+| Component | Technology |
+|---|---|
+| LLM | Google Gemini 2.5 Flash |
+| Agent framework | LangGraph + LangChain |
+| Hybrid search | Haystack 2.x + OpenSearch (BM25 + k-NN + RRF) |
+| Embeddings | sentence-transformers/all-MiniLM-L6-v2 (384 dims) |
+| Web search | Tavily API |
+| Backend | FastAPI + Uvicorn |
+| Frontend | Streamlit |
+| Vector store | OpenSearch 2.12.0 |
+| Containers | Docker + Docker Compose v2 |
+| Evaluation | RAGAS (faithfulness, context_precision) |
+| Runtime | Python 3.11 |
