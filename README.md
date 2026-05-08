@@ -20,29 +20,37 @@ The system combines a **LangGraph agent** with **Gemini 2.5 Flash**, **hybrid se
 
 ## Architecture
 
-```
-┌─────────────────┐     POST /chat     ┌──────────────────────────────────────┐
-│   Frontend      │ ─────────────────► │   Backend (FastAPI)                  │
-│   (Streamlit)   │ ◄───────────────── │   ├─ Formatter: mock | gemini       │
-│   :8501         │     JSON response  │   │            | langchain ──────┐   │
-└─────────────────┘                    │   └─ /health, /docs             │   │
-                                       └─────────────────────────────────│───┘
-                                                                         │
-                                       ┌─────────────────────────────────▼───┐
-                                       │   Agent (LangGraph)                 │
-                                       │   ├─ Gemini 2.5 Flash (LLM)        │
-                                       │   ├─ Query reformulation            │
-                                       │   └─ Tools:                         │
-                                       │       ├─ hybrid_opensearch_search   │
-                                       │       │  (BM25 + embeddings + RRF)  │
-                                       │       └─ web_search (Tavily)        │
-                                       └──────────────┬─────────────────┬────┘
-                                                      │                 │
-                                       ┌──────────────▼──┐   ┌─────────▼─────┐
-                                       │  OpenSearch      │   │  Tavily API   │
-                                       │  :9200           │   │  (web search) │
-                                       │  Index: policies │   └───────────────┘
-                                       └─────────────────┘
+```mermaid
+flowchart LR
+    frontend["Frontend<br/>(Streamlit)<br/>:8501"]
+
+    subgraph backend["Backend (FastAPI)"]
+        api["POST /chat<br/>/health<br/>/docs"]
+        formatter["Formatter<br/>mock / gemini / langchain"]
+    end
+
+    subgraph agent["Agent (LangGraph)"]
+        llm["Gemini 2.5 Flash (LLM)"]
+        reformulation["Query reformulation"]
+        tools["Tools"]
+        hybrid["hybrid_opensearch_search<br/>(BM25 + embeddings + RRF)"]
+        web["web_search (Tavily)"]
+
+        llm --> reformulation
+        reformulation --> tools
+        tools --> hybrid
+        tools --> web
+    end
+
+    opensearch["OpenSearch<br/>:9200<br/>Index: policies"]
+    tavily["Tavily API<br/>(web search)"]
+
+    frontend -- "POST /chat" --> api
+    api -- "JSON response" --> frontend
+    api --> formatter
+    formatter -- "langchain" --> llm
+    hybrid --> opensearch
+    web --> tavily
 ```
 
 The application is composed of four Docker services orchestrated via `docker-compose.yml`:
