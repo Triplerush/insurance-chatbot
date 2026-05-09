@@ -177,7 +177,7 @@ jobs:
             # publicos de MAPFRE/SURA/Mutual la primera vez (luego skipea si ya existen).
             # `--skip-eda` evita reanalisis pesado en cada deploy.
             docker compose --profile ingest run --rm tasks \
-              python data/pipeline/pipeline.py --skip-eda
+              python pipeline/pipeline.py --skip-eda
 
             # Limpieza del disco
             docker image prune -a -f
