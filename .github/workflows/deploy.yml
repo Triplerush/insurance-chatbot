@@ -172,12 +172,11 @@ jobs:
             docker compose down --remove-orphans || true
             docker compose up -d
 
-            # Ejecutar pipeline de ingesta de manera efimera.
-            # `--skip-download` no se pasa: queremos que el pipeline baje los PDFs
-            # publicos de MAPFRE/SURA/Mutual la primera vez (luego skipea si ya existen).
-            # `--skip-eda` evita reanalisis pesado en cada deploy.
             docker compose --profile ingest run --rm tasks \
-              python pipeline/pipeline.py --skip-eda
+              python pipeline/download_public_pdfs.py --output-dir /app/data/raw_policies
+
+            docker compose --profile ingest run --rm tasks \
+              python pipeline/pipeline.py --skip-download --skip-eda
 
             # Limpieza del disco
             docker image prune -a -f
