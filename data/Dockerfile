@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -23,13 +22,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 ARG EMBEDDING_MODEL
 ENV EMBEDDING_MODEL=${EMBEDDING_MODEL}
 
-RUN python - << 'PY'
-from langchain_huggingface import HuggingFaceEmbeddings
-import os
-
-model_name = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-print(f"Pre-descargando modelo de embeddings: {model_name}")
-HuggingFaceEmbeddings(model_name=model_name)
-PY
+RUN python -c "import os; from langchain_huggingface import HuggingFaceEmbeddings; m = os.getenv('EMBEDDING_MODEL', 'sentence-transformers/all-MiniLM-L6-v2'); print(f'Pre-descargando modelo de embeddings: {m}'); HuggingFaceEmbeddings(model_name=m)"
 
 COPY . .
