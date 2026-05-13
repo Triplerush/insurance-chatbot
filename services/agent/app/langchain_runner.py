@@ -2,7 +2,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 from . import get_settings
 from .agent_state import AgentState
@@ -13,12 +13,13 @@ from .graph import build_graph
 class AgentRunner:
     def __init__(self):
         settings = get_settings()
-        self.llm = ChatGoogleGenerativeAI(
-            model=settings.gemini_model,
-            google_api_key=settings.gemini_api_key,
-            temperature=settings.gemini_temperature or 0.0,
-            top_p=settings.gemini_top_p or 0.95,
-            max_output_tokens=settings.gemini_max_output_tokens or 1024,
+        self.llm = ChatOpenAI(
+            model=settings.llm_model,
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+            temperature=settings.llm_temperature if settings.llm_temperature is not None else 0.0,
+            top_p=settings.llm_top_p if settings.llm_top_p is not None else 0.95,
+            max_tokens=settings.llm_max_output_tokens or 1024,
         )
         self.nodes = AgentNodes(self.llm)
         self.graph = build_graph(self.nodes)
@@ -94,5 +95,13 @@ class AgentRunner:
             }
         return resp
 
-_agent_runner_instance = AgentRunner()
-run_langchain_agent = _agent_runner_instance.run
+_agent_runner_instance: Optional[AgentRunner] = None
+
+
+async def run_langchain_agent(**kwargs):
+    """Lazy entry point: build the runner on first call so tests can import
+    this module without LLM_API_KEY in the environment."""
+    global _agent_runner_instance
+    if _agent_runner_instance is None:
+        _agent_runner_instance = AgentRunner()
+    return await _agent_runner_instance.run(**kwargs)

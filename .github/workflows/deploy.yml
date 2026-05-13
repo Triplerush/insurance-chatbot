@@ -66,14 +66,16 @@ jobs:
       - name: Deploy to VPS via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 30m
-          envs: GEMINI_API_KEY,TAVILY_API_KEY
+          envs: LLM_API_KEY,LLM_BASE_URL,LLM_MODEL,TAVILY_API_KEY
           script: |
             set -e
 
@@ -126,14 +128,15 @@ jobs:
             EDA_OUT_DIR=/app/eda_out
 
             # API keys (inyectadas por el CI)
-            GEMINI_API_KEY=$GEMINI_API_KEY
+            LLM_API_KEY=$LLM_API_KEY
+            LLM_BASE_URL=${LLM_BASE_URL:-https://inference.do-ai.run/v1}
             TAVILY_API_KEY=$TAVILY_API_KEY
 
-            # LLM config
-            GEMINI_MODEL=gemini-2.5-flash
-            GEMINI_TEMPERATURE=0.2
-            GEMINI_TOP_P=0.95
-            GEMINI_MAX_OUTPUT_TOKENS=1024
+            # LLM config (proveedor OpenAI-compatible)
+            LLM_MODEL=${LLM_MODEL:-openai-gpt-oss-120b}
+            LLM_TEMPERATURE=0.2
+            LLM_TOP_P=0.95
+            LLM_MAX_OUTPUT_TOKENS=1024
 
             # Backend
             INSURANCE_CHATBOT_FORMATTER=langchain

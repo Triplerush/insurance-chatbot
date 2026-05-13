@@ -11,7 +11,7 @@ from langchain_core.messages import (
     ToolMessage,
     BaseMessage,
 )
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 from .agent_state import AgentState
 
@@ -20,7 +20,7 @@ class AgentNodes:
     MAX_SNIPPET_CHARS = 350
     TOOL_LOOP_LIMIT = 3
 
-    def __init__(self, llm: ChatGoogleGenerativeAI):
+    def __init__(self, llm: ChatOpenAI):
         self.llm = llm
 
     def _build_context_block(self, contexts: List[Dict[str, Any]]) -> str:

@@ -36,3 +36,6 @@ data/*.csv
 
 # Ignorar resultados de pruebas
 data/test/ragas_eval/results/
+
+# Override local de docker-compose (expone puertos solo en dev)
+docker-compose.local.yml

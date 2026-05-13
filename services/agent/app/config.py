@@ -11,12 +11,24 @@ class AgentSettings(BaseSettings):
     Lee variables de entorno (.env o docker-compose).
     """
 
-    # --- Gemini (LangChain wrapper ChatGoogleGenerativeAI) ---
-    gemini_api_key: Optional[str] = Field(default=None, validation_alias="GEMINI_API_KEY") 
-    gemini_model: Optional[str] = Field(default=None, validation_alias="GEMINI_MODEL") 
-    gemini_temperature: Optional[float] = Field(default=None, validation_alias="GEMINI_TEMPERATURE") 
-    gemini_top_p: Optional[float] = Field(default=None, validation_alias="GEMINI_TOP_P") 
-    gemini_max_output_tokens: Optional[int] = Field(default=None, validation_alias="GEMINI_MAX_OUTPUT_TOKENS")
+    # --- LLM (OpenAI-compatible endpoint: DO, Together, Groq, OpenAI, etc.) ---
+    llm_api_key: Optional[str] = Field(
+        default=None, validation_alias="LLM_API_KEY"
+    )
+    llm_base_url: str = Field(
+        default="https://inference.do-ai.run/v1",
+        validation_alias="LLM_BASE_URL",
+    )
+    llm_model: str = Field(
+        default="openai-gpt-oss-120b", validation_alias="LLM_MODEL"
+    )
+    llm_temperature: Optional[float] = Field(
+        default=None, validation_alias="LLM_TEMPERATURE"
+    )
+    llm_top_p: Optional[float] = Field(default=None, validation_alias="LLM_TOP_P")
+    llm_max_output_tokens: Optional[int] = Field(
+        default=None, validation_alias="LLM_MAX_OUTPUT_TOKENS"
+    )
 
     # --- Tavily ---
     tavily_api_key: Optional[str] = Field(default=None, validation_alias="TAVILY_API_KEY")

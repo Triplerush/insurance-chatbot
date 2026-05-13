@@ -6,8 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN pip config set global.default-timeout 120 \
+ && pip config set global.disable-pip-version-check true
+
 COPY services/frontend/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install --no-cache-dir --retries 5 -r /app/requirements.txt
 
 COPY services/frontend/ /app/
 

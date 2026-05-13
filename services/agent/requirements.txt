@@ -11,9 +11,9 @@ langchain-community>=0.3,<0.5
 langchain-text-splitters>=0.3,<2
 langgraph>=0.2.35,<0.3
 
-# Google Gemini (wrapper LangChain)
-langchain-google-genai>=2.1,<3
-google-genai>=0.3
+# DigitalOcean Serverless Inference (OpenAI-compatible) via LangChain
+langchain-openai>=0.2,<1
+openai>=1.40
 
 # Embeddings / utilidades
 langchain-huggingface>=0.1,<2
