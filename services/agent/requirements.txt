@@ -24,7 +24,7 @@ pypdf==5.1.0
 
 # Web search (Tavily)
 tavily-python==0.5.0
-langchain-tavily==0.1.0
+langchain-tavily==0.1.5
 
 # Haystack 2.x + OpenSearch
 haystack-ai==2.8.1
