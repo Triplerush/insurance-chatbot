@@ -21,10 +21,9 @@ services:
       - default
 
   # ─── Frontend Streamlit ────────────────────────────────────────
-  # Streamlit detras de NPM usando subpath /insurance/.
-  # baseUrlPath asegura que los assets y websockets se sirven en
-  # esa ruta. enableXsrfProtection=false porque el origen no
-  # coincide con la URL externa.
+  # Streamlit servido en la raiz del subdominio insurance.triplerush.tech.
+  # NPM reenvia al proxy interno; el proxy pasa / a Streamlit.
+  # enableXsrfProtection=false porque el origen no coincide con la URL externa.
   frontend:
     build:
       context: .
@@ -40,7 +39,6 @@ services:
       - app.py
       - --server.port=8501
       - --server.address=0.0.0.0
-      - --server.baseUrlPath=/insurance
       - --server.enableCORS=false
       - --server.enableXsrfProtection=false
     depends_on:
@@ -104,8 +102,8 @@ services:
       - default
 
   # ─── Proxy interno del sub-proyecto ────────────────────────────
-  # Agrupa frontend + backend bajo el subpath /insurance/.
-  # NPM (en el Droplet) reenvia triplerush.tech/insurance/* a
+  # Agrupa frontend + backend bajo insurance.triplerush.tech.
+  # NPM (en el Droplet) reenvia insurance.triplerush.tech a
   # insurance_proxy:3081 usando la red compartida portfolio-net.
   # No expone puertos al host: NPM lo alcanza via portfolio-net.
   nginx-proxy:

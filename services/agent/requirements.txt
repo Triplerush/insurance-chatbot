@@ -1,37 +1,35 @@
 # Servicio HTTP
 fastapi==0.115.0
 uvicorn[standard]==0.30.0
-requests>=2.31.0
-pydantic>=2.7,<3
-pydantic-settings>=2.2,<3
+requests==2.32.5
+pydantic==2.7.4
+pydantic-settings==2.4.0
 
 # LangChain + LangGraph
-langchain-core>=0.3,<2
-langchain-community>=0.3,<0.5
-langchain-text-splitters>=0.3,<2
-langgraph>=0.2.35,<0.3
+langchain-core==0.3.31
+langchain-community==0.3.15
+langchain-text-splitters==0.3.5
+langgraph==0.2.35
 
 # DigitalOcean Serverless Inference (OpenAI-compatible) via LangChain
-langchain-openai>=0.2,<1
-openai>=1.40
+langchain-openai==0.2.14
+openai==1.58.1
 
 # Embeddings / utilidades
-langchain-huggingface>=0.1,<2
-sentence-transformers>=2.7
-transformers>=4.38  # Para cross-encoders
-torch>=2.2.0       # PyTorch para cross-encoders
-pypdf>=4.2
+langchain-huggingface==0.1.2
+sentence-transformers==3.3.1
+transformers==4.48.0  # Para cross-encoders
+torch==2.9.0          # PyTorch para cross-encoders
+pypdf==5.1.0
 
 # Web search (Tavily)
-tavily-python>=0.4
-langchain-tavily>=0.1
+tavily-python==0.5.0
+langchain-tavily==0.1.0
 
 # Haystack 2.x + OpenSearch
-haystack-ai>=2.0
-opensearch-haystack>=4.0
-opensearch-py>=2.6
-transformers>=4.38
-torch>=2.2.0
+haystack-ai==2.8.1
+opensearch-haystack==4.0.0
+opensearch-py==2.8.0
 
 # Tests del agente
-pytest>=8
+pytest==8.3.4
